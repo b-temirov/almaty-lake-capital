@@ -1,7 +1,7 @@
 #!/bin/bash
 
-STORE_DIRECTORY=. \
-python3 scripts/download-trade.py \
+STORE_DIRECTORY=bot/data \
+python3 scripts/python/download-trade.py \
   -t spot \
   -s BTCUSDT \
   -startDate 2026-03-12 \
