@@ -1,0 +1,3 @@
+To use scripts/download-aggTrade.sh, from the root directory, run:
+chmod u+x scripts/download-aggTrade.sh
+./scripts/download-aggTrade.sh
