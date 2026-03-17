@@ -1,6 +1,6 @@
 import os
 import json
-from bot.client import RoostooClient
+from bot.strategy.client import RoostooClient
 from dotenv import load_dotenv
 
 

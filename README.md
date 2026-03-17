@@ -9,3 +9,8 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 Then, to install required packages, use `pip install -r requirements.txt`
+
+Guys if you want to run tests from project root run
+```
+python3 -m tests.testname
+```
