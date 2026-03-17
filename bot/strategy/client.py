@@ -67,7 +67,7 @@ class RoostooClient:
         return resp.json()
 
     # ---------- Public endpoints ----------
-    def server_time(self):
+    def server_time(self):  # add validation
         return self._get(path="/v3/serverTime")
 
     def exchange_info(self, refresh=False):
@@ -85,66 +85,52 @@ class RoostooClient:
     def balance(self):
         return self._get("/v3/balance", signed=True)
 
-    # ---------- Pair metadata / validation ----------
-    def get_pair_info(self, pair: str) -> Dict[str, Any]:
+    # ---------- Coin metadata / validation ----------
+    def get_coin_info(self, coin):
         info = self.exchange_info()
+
+        if not info.get("IsRunning", False):
+            raise ValueError("Exchange is not running")
+
         trade_pairs = info.get("TradePairs", {})
-        if pair not in trade_pairs:
-            raise ValueError(f"Unknown trading pair: {pair}")
-        return trade_pairs[pair]
+        key = f"{coin.upper()}/USD"
+        if key not in trade_pairs:
+            raise ValueError(f"Unknown coin: {coin}")
+        return trade_pairs[key]
 
     def _round_to_precision(self, value: float, precision: int) -> float:
         q = Decimal("1") if precision == 0 else Decimal("1." + "0" * precision)
         return float(Decimal(str(value)).quantize(q, rounding=ROUND_DOWN))
 
-    def round_quantity(self, pair: str, quantity: float) -> float:
-        pair_info = self.get_pair_info(pair)
-        precision = int(pair_info["AmountPrecision"])
+    def free_balance(self, asset):
+        wallet = self.balance().get("SpotWallet", {})
+        asset_info = wallet.get(asset.upper(), {})
+        return float(asset_info.get("Free", 0))
+
+    def fee_rate(self, order_type):
+        order_type = order_type.upper()
+        if order_type == "MARKET":
+            return 0.001
+        if order_type == "LIMIT":
+            return 0.0005
+        raise ValueError("order_type must be MARKET or LIMIT")
+
+    def round_quantity(self, coin, quantity):
+        coin_info = self.get_coin_info(coin)
+        precision = int(coin_info["AmountPrecision"])
         return self._round_to_precision(quantity, precision)
 
-    def round_price(self, pair: str, price: float) -> float:
-        pair_info = self.get_pair_info(pair)
-        precision = int(pair_info["PricePrecision"])
+    def round_price(self, coin, price):
+        coin_info = self.get_coin_info(coin)
+        precision = int(coin_info["PricePrecision"])
         return self._round_to_precision(price, precision)
 
-    def validate_order(
-        self, pair: str, quantity: float, price: Optional[float] = None
-    ) -> None:
-        pair_info = self.get_pair_info(pair)
-
-        if not pair_info.get("CanTrade", False):
-            raise ValueError(f"Pair {pair} is not tradable")
-
-        min_order = float(pair_info["MiniOrder"])
-        if quantity < min_order:
-            raise ValueError(f"Quantity {quantity} is below MiniOrder {min_order}")
-
-        rounded_qty = self.round_quantity(pair, quantity)
-        if rounded_qty != quantity:
-            raise ValueError(
-                f"Quantity {quantity} does not match AmountPrecision; try {rounded_qty}"
-            )
-
-        if price is not None:
-            rounded_price = self.round_price(pair, price)
-            if rounded_price != price:
-                raise ValueError(
-                    f"Price {price} does not match PricePrecision; try {rounded_price}"
-                )
-
-    # ---------- Orders ----------
-
-    def place_order(
-        self,
-        pair: str,
-        side: str,
-        order_type: str,
-        quantity: float,
-        price: Optional[float] = None,
-        validate: bool = True,
-    ) -> Dict[str, Any]:
+    def validate_order(self, coin, side, order_type, quantity, price=None):
+        coin = coin.upper()
         side = side.upper()
         order_type = order_type.upper()
+
+        coin_info = self.get_coin_info(coin)
 
         if side not in {"BUY", "SELL"}:
             raise ValueError("side must be BUY or SELL")
@@ -158,11 +144,77 @@ class RoostooClient:
         if order_type == "MARKET" and price is not None:
             raise ValueError("MARKET order should not include price")
 
-        if validate:
-            self.validate_order(pair, quantity, price)
+        if not coin_info.get("CanTrade", False):
+            raise ValueError(f"coin {coin} is not tradable")
+        if quantity <= 0:
+            raise ValueError("quantity must be > 0")
+
+        rounded_qty = self.round_quantity(coin, quantity)
+        if Decimal(str(rounded_qty)) != Decimal(str(quantity)):
+            raise ValueError(
+                f"Quantity {quantity} does not match AmountPrecision; try {rounded_qty}"
+            )
+
+        if order_type == "LIMIT":
+            if price is None or price <= 0:
+                raise ValueError("LIMIT order requires price > 0")
+
+            rounded_price = self.round_price(coin, price)
+            if Decimal(str(rounded_price)) != Decimal(str(price)):
+                raise ValueError(
+                    f"Price {price} does not match PricePrecision; try {rounded_price}"
+                )
+
+            effective_price = price
+
+        elif order_type == "MARKET":
+            ticker = self.ticker(f"{coin}/USD")
+            pair_data = ticker["Data"][f"{coin}/USD"]
+
+            if side == "BUY":
+                effective_price = float(pair_data["MinAsk"])
+            else:
+                effective_price = float(pair_data["MaxBid"])
+
+        else:
+            raise ValueError("order_type must be LIMIT or MARKET")
+
+        min_order = float(coin_info["MiniOrder"])
+        notional = effective_price * quantity
+
+        if notional <= min_order:
+            raise ValueError(f"Order value {notional} is below MiniOrder {min_order}")
+
+        fee_rate = self.fee_rate(order_type)
+
+        if side == "BUY":
+            usd_free = self.free_balance("USD")
+            required_usd = notional * (1 + fee_rate)
+            if usd_free < required_usd:
+                raise ValueError(
+                    f"Insufficient USD balance: need {required_usd}, have {usd_free}"
+                )
+
+        elif side == "SELL":
+            coin_free = self.free_balance(coin)
+            if coin_free < quantity:
+                raise ValueError(
+                    f"Insufficient {coin} balance: need {quantity}, have {coin_free}"
+                )
+
+        else:
+            raise ValueError("side must be BUY or SELL")
+
+    # ---------- Orders ----------
+    def place_order(self, coin, side, order_type, quantity, price=None):
+        side = side.upper()
+        order_type = order_type.upper()
+        coin = coin.upper()
+
+        self.validate_order(coin, side, order_type, quantity, price)
 
         data = {
-            "pair": pair,
+            "pair": coin + "/USD",
             "side": side,
             "type": order_type,
             "quantity": quantity,
@@ -172,24 +224,24 @@ class RoostooClient:
 
         return self._post("/v3/place_order", data=data, signed=True)
 
-    def market_buy(self, pair: str, quantity: float) -> Dict[str, Any]:
+    def market_buy(self, coin, quantity):
         return self.place_order(
-            pair=pair, side="BUY", order_type="MARKET", quantity=quantity
+            coin=coin, side="BUY", order_type="MARKET", quantity=quantity
         )
 
-    def market_sell(self, pair: str, quantity: float) -> Dict[str, Any]:
+    def market_sell(self, coin, quantity):
         return self.place_order(
-            pair=pair, side="SELL", order_type="MARKET", quantity=quantity
+            coin=coin, side="SELL", order_type="MARKET", quantity=quantity
         )
 
-    def limit_buy(self, pair: str, quantity: float, price: float) -> Dict[str, Any]:
+    def limit_buy(self, coin, quantity, price):
         return self.place_order(
-            pair=pair, side="BUY", order_type="LIMIT", quantity=quantity, price=price
+            coin=coin, side="BUY", order_type="LIMIT", quantity=quantity, price=price
         )
 
-    def limit_sell(self, pair: str, quantity: float, price: float) -> Dict[str, Any]:
+    def limit_sell(self, coin, quantity, price):
         return self.place_order(
-            pair=pair, side="SELL", order_type="LIMIT", quantity=quantity, price=price
+            coin=coin, side="SELL", order_type="LIMIT", quantity=quantity, price=price
         )
 
     def query_order(
