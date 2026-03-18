@@ -1,3 +1,0 @@
-To use fetcher/download-aggTrade.sh, from the root directory, run:
-chmod u+x fetcher/download-aggTrade.sh
-./fetcher/download-aggTrade.sh

@@ -1,7 +1,7 @@
 import os
 import json
 from bot.logging_config import setup_logging
-from bot.strategy.client import RoostooClient
+from bot.execution.roostoo_client import RoostooClient
 from dotenv import load_dotenv
 
 

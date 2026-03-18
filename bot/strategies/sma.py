@@ -1,4 +1,4 @@
-from bot.strategy.signals.backtester import CryptoStrategy
+from bot.backtesting.backtester import CryptoStrategy
 
 import numpy as np
 import pandas as pd

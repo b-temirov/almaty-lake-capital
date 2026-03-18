@@ -1,6 +1,6 @@
-from bot.data.binance_rest import BinanceRestClient
-from bot.strategy.signals.sma import SMAStrategy
-from bot.strategy.signals.backtester import Backtester
+from bot.data.historical.binance_rest import BinanceRestClient
+from bot.strategies.sma import SMAStrategy
+from bot.backtesting.backtester import Backtester
 from datetime import datetime, timezone
 
 
