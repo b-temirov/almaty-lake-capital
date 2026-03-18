@@ -38,11 +38,21 @@ class RoostooClient:
             "MSG-SIGNATURE": self._sign(params),
         }
 
+    def _validate_signed_timestamp(self, timestamp: int) -> None:
+        server_payload = self.server_time()
+        server_timestamp = int(server_payload["ServerTime"])
+
+        if abs(server_timestamp - int(timestamp)) > 60 * 1000:
+            raise ValueError(
+                "Signed request timestamp is older than 1 minute from server time"
+            )
+
     def _get(self, path, params=None, signed=False):
         params = dict(params or {})
 
         if signed:
             params.setdefault("timestamp", self._timestamp())
+            self._validate_signed_timestamp(params["timestamp"])
 
         headers = self._signed_headers(params) if signed else {}
 
@@ -57,6 +67,8 @@ class RoostooClient:
     def _post(self, path, data, signed=True):
         payload = dict(data)
         payload.setdefault("timestamp", self._timestamp())
+        if signed:
+            self._validate_signed_timestamp(payload["timestamp"])
         headers = self._signed_headers(payload) if signed else {}
         resp = self.session.post(
             f"{self.base_url}{path}",
