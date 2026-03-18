@@ -1,11 +1,13 @@
 # test.py
 import os
 from pprint import pprint
+from bot.logging_config import setup_logging
 from bot.strategy.client import RoostooClient
 from dotenv import load_dotenv
 
 
 load_dotenv()
+setup_logging()
 
 
 def main():
@@ -28,12 +30,12 @@ def main():
     # except Exception as e:
     #     print(f"exchange_info failed: {e}")
 
-    print("\n=== 3) ticker() -> all pairs ===")
-    try:
-        result = client.ticker("BTC/USD")
-        pprint(result)
-    except Exception as e:
-        print(f"ticker(all) failed: {e}")
+    # print("\n=== 3) ticker() -> all pairs ===")
+    # try:
+    #     result = client.ticker("BTC/USD")
+    #     pprint(result)
+    # except Exception as e:
+    #     print(f"ticker(all) failed: {e}")
 
     # print("\n=== 4) ticker(pair='BTC/USD') ===")
     # try:
@@ -42,12 +44,12 @@ def main():
     # except Exception as e:
     #     print(f"ticker(single pair) failed: {e}")
 
-    # print("\n=== 5) balance ===")
-    # try:
-    #     result = client.balance()
-    #     pprint(result)
-    # except Exception as e:
-    #     print(f"balance failed: {e}")
+    print("\n=== 5) balance ===")
+    try:
+        result = client.balance()
+        pprint(result)
+    except Exception as e:
+        print(f"balance failed: {e}")
 
     # print("\n=== 6) market_buy('DOGE', 20) ===")
     # try:

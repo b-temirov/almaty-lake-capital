@@ -1,9 +1,13 @@
 import time
 import hmac
 import hashlib
+import logging
 import requests
 from decimal import Decimal, ROUND_DOWN
 from typing import Dict, Any, Optional
+
+
+logger = logging.getLogger(__name__)
 
 
 class RoostooClient:
@@ -43,6 +47,11 @@ class RoostooClient:
         server_timestamp = int(server_payload["ServerTime"])
 
         if abs(server_timestamp - int(timestamp)) > 60 * 1000:
+            logger.warning(
+                "Signed request timestamp validation failed timestamp=%s server_time=%s",
+                timestamp,
+                server_timestamp,
+            )
             raise ValueError(
                 "Signed request timestamp is older than 1 minute from server time"
             )
@@ -55,14 +64,35 @@ class RoostooClient:
             self._validate_signed_timestamp(params["timestamp"])
 
         headers = self._signed_headers(params) if signed else {}
+        start = time.perf_counter()
 
-        resp = self.session.get(
-            f"{self.base_url}{path}",
-            params=params,
-            headers=headers,
-        )
-        resp.raise_for_status()
-        return resp.json()
+        try:
+            resp = self.session.get(
+                f"{self.base_url}{path}",
+                params=params,
+                headers=headers,
+            )
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.debug(
+                "GET %s signed=%s status=%s latency_ms=%.2f params=%s",
+                path,
+                signed,
+                resp.status_code,
+                elapsed_ms,
+                params,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.exception(
+                "GET %s signed=%s failed latency_ms=%.2f params=%s",
+                path,
+                signed,
+                elapsed_ms,
+                params,
+            )
+            raise
 
     def _post(self, path, data, signed=True):
         payload = dict(data)
@@ -70,32 +100,79 @@ class RoostooClient:
         if signed:
             self._validate_signed_timestamp(payload["timestamp"])
         headers = self._signed_headers(payload) if signed else {}
-        resp = self.session.post(
-            f"{self.base_url}{path}",
-            data=payload,
-            headers=headers,
-        )
-        resp.raise_for_status()
-        return resp.json()
+        start = time.perf_counter()
+
+        try:
+            resp = self.session.post(
+                f"{self.base_url}{path}",
+                data=payload,
+                headers=headers,
+            )
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.debug(
+                "POST %s signed=%s status=%s latency_ms=%.2f payload=%s",
+                path,
+                signed,
+                resp.status_code,
+                elapsed_ms,
+                payload,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.exception(
+                "POST %s signed=%s failed latency_ms=%.2f payload=%s",
+                path,
+                signed,
+                elapsed_ms,
+                payload,
+            )
+            raise
 
     # ---------- Public endpoints ----------
     def server_time(self):  # add validation
-        return self._get(path="/v3/serverTime")
+        logger.info("server_time called")
+        result = self._get(path="/v3/serverTime")
+        logger.info("server_time returned server_time=%s", result.get("ServerTime"))
+        return result
 
     def exchange_info(self, refresh=False):
+        logger.info("exchange_info called refresh=%s", refresh)
         if self._exchange_info_cache is None or refresh:
             self._exchange_info_cache = self._get(path="/v3/exchangeInfo")
+            logger.info(
+                "exchange_info refreshed pairs=%s is_running=%s",
+                len(self._exchange_info_cache.get("TradePairs", {})),
+                self._exchange_info_cache.get("IsRunning"),
+            )
+        else:
+            logger.info(
+                "exchange_info returned cached pairs=%s",
+                len(self._exchange_info_cache.get("TradePairs", {})),
+            )
         return self._exchange_info_cache
 
     def ticker(self, pair=None):
+        logger.info("ticker called pair=%s", pair)
         params = {"timestamp": self._timestamp()}
         if pair is not None:
             params["pair"] = pair
-        return self._get(path="/v3/ticker", params=params)
+        result = self._get(path="/v3/ticker", params=params)
+        data = result.get("Data", result)
+        if pair is not None:
+            logger.info("ticker returned pair=%s found=%s", pair, pair in data)
+        else:
+            logger.info("ticker returned pairs=%s", len(data))
+        return result
 
     # ---------- Account ----------
     def balance(self):
-        return self._get("/v3/balance", signed=True)
+        logger.info("balance called")
+        result = self._get("/v3/balance", signed=True)
+        wallet = result.get("SpotWallet", {})
+        logger.info("balance returned assets=%s", len(wallet))
+        return result
 
     # ---------- Coin metadata / validation ----------
     def get_coin_info(self, coin):
@@ -141,7 +218,14 @@ class RoostooClient:
         coin = coin.upper()
         side = side.upper()
         order_type = order_type.upper()
-
+        logger.info(
+            "Validating order pair=%s/USD side=%s type=%s quantity=%s price=%s",
+            coin,
+            side,
+            order_type,
+            quantity,
+            price,
+        )
         coin_info = self.get_coin_info(coin)
 
         if side not in {"BUY", "SELL"}:
@@ -217,12 +301,29 @@ class RoostooClient:
         else:
             raise ValueError("side must be BUY or SELL")
 
+        logger.info(
+            "Order validation passed pair=%s/USD side=%s type=%s quantity=%s price=%s",
+            coin,
+            side,
+            order_type,
+            quantity,
+            price,
+        )
+
     # ---------- Orders ----------
     def place_order(self, coin, side, order_type, quantity, price=None):
         side = side.upper()
         order_type = order_type.upper()
         coin = coin.upper()
 
+        logger.info(
+            "place_order called coin=%s side=%s type=%s quantity=%s price=%s",
+            coin,
+            side,
+            order_type,
+            quantity,
+            price,
+        )
         self.validate_order(coin, side, order_type, quantity, price)
 
         data = {
@@ -234,27 +335,59 @@ class RoostooClient:
         if order_type == "LIMIT":
             data["price"] = price
 
-        return self._post("/v3/place_order", data=data, signed=True)
+        result = self._post("/v3/place_order", data=data, signed=True)
+        logger.info(
+            "place_order returned pair=%s order_id=%s",
+            data["pair"],
+            result.get("OrderId", result.get("order_id")),
+        )
+        return result
 
     def market_buy(self, coin, quantity):
-        return self.place_order(
+        logger.info("market_buy called coin=%s quantity=%s", coin, quantity)
+        result = self.place_order(
             coin=coin, side="BUY", order_type="MARKET", quantity=quantity
         )
+        logger.info("market_buy completed coin=%s quantity=%s", coin, quantity)
+        return result
 
     def market_sell(self, coin, quantity):
-        return self.place_order(
+        logger.info("market_sell called coin=%s quantity=%s", coin, quantity)
+        result = self.place_order(
             coin=coin, side="SELL", order_type="MARKET", quantity=quantity
         )
+        logger.info("market_sell completed coin=%s quantity=%s", coin, quantity)
+        return result
 
     def limit_buy(self, coin, quantity, price):
-        return self.place_order(
+        logger.info(
+            "limit_buy called coin=%s quantity=%s price=%s", coin, quantity, price
+        )
+        result = self.place_order(
             coin=coin, side="BUY", order_type="LIMIT", quantity=quantity, price=price
         )
+        logger.info(
+            "limit_buy completed coin=%s quantity=%s price=%s",
+            coin,
+            quantity,
+            price,
+        )
+        return result
 
     def limit_sell(self, coin, quantity, price):
-        return self.place_order(
+        logger.info(
+            "limit_sell called coin=%s quantity=%s price=%s", coin, quantity, price
+        )
+        result = self.place_order(
             coin=coin, side="SELL", order_type="LIMIT", quantity=quantity, price=price
         )
+        logger.info(
+            "limit_sell completed coin=%s quantity=%s price=%s",
+            coin,
+            quantity,
+            price,
+        )
+        return result
 
     def query_order(
         self,
@@ -262,12 +395,20 @@ class RoostooClient:
         pair: Optional[str] = None,
         pending_only: Optional[bool] = None,
     ) -> Dict[str, Any]:
+        logger.info(
+            "query_order called order_id=%s pair=%s pending_only=%s",
+            order_id,
+            pair,
+            pending_only,
+        )
         data = {
             "order_id": order_id,
             "pair": pair,
             "pending_only": pending_only,
         }
-        return self._post("/v3/query_order", data=data, signed=True)
+        result = self._post("/v3/query_order", data=data, signed=True)
+        logger.info("query_order returned")
+        return result
 
     def cancel_order(
         self,
@@ -276,12 +417,18 @@ class RoostooClient:
     ) -> Dict[str, Any]:
         if order_id is None and pair is None:
             raise ValueError("Provide at least order_id or pair")
+        logger.info("cancel_order called order_id=%s pair=%s", order_id, pair)
         data = {
             "order_id": order_id,
             "pair": pair,
         }
-        return self._post("/v3/cancel_order", data=data, signed=True)
+        result = self._post("/v3/cancel_order", data=data, signed=True)
+        logger.info("cancel_order returned order_id=%s pair=%s", order_id, pair)
+        return result
 
     def pending_count(self, pair: Optional[str] = None) -> Dict[str, Any]:
+        logger.info("pending_count called pair=%s", pair)
         params = {"pair": pair} if pair else {}
-        return self._get("/v3/pending_count", params=params, signed=True)
+        result = self._get("/v3/pending_count", params=params, signed=True)
+        logger.info("pending_count returned pair=%s", pair)
+        return result
