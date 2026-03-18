@@ -5,4 +5,5 @@ __pycache__/
 logs/
 .vscode/
 .idea/
-.DS_Store
+.DS_Storeq
+/bot/data/data
