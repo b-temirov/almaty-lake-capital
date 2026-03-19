@@ -5,6 +5,10 @@ import os
 import matplotlib.pyplot as plt
 from pathlib import Path
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parents[2]
+DATA_ROOT = REPO_ROOT / 'bot' / 'data' / 'data' / 'spot' / 'daily' / 'klines' / 'BTCUSDT'
+
 def calculate_market_events(price_series, l_bound, u_bound, rw):
     """
     Calculates bounce and penetration indices based on state-machine logic.
@@ -53,7 +57,8 @@ def calculate_market_events(price_series, l_bound, u_bound, rw):
 def main(freq, atr):
     # Configuration
     # atr = 200
-    path = f'bot/data/data/spot/daily/klines/BTCUSDT/{freq}/2026-01-11_2026-03-13/'
+    # path = f'bot/data/data/spot/daily/klines/BTCUSDT/{freq}/2026-02-12_2026-03-12/'
+    path = DATA_ROOT / freq / '2026-02-12_2026-03-12'
 
     all_files = glob.glob(os.path.join(path, "*.csv"))
     cols = ['open_time', 'open', 'high', 'low', 'close', 'volume', 'close_time', 
@@ -110,7 +115,8 @@ def main(freq, atr):
     # plt.show()
 
     # Define the directory path
-    figure_dir = Path(f'./bot/strategy/discovery/figures/{atr}')
+    # figure_dir = Path(f'./bot/strategy/discovery/figures/{atr}')
+    figure_dir = SCRIPT_DIR / 'figures' / str(atr)
 
     # Create the folder if it doesn't exist (parents=True creates figures/ if missing too)
     figure_dir.mkdir(parents=True, exist_ok=True)
@@ -118,7 +124,8 @@ def main(freq, atr):
     # Save the plot
     plt.savefig(fname=figure_dir / f'{freq}_bounce_percentage.png')
 
-    data_dir = Path(f'./bot/strategy/discovery/data/{atr}')
+    # data_dir = Path(f'./bot/strategy/discovery/data/{atr}')
+    data_dir = SCRIPT_DIR / 'data' / str(atr)
 
     data_dir.mkdir(parents=True, exist_ok=True)
     
