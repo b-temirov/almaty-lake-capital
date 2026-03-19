@@ -28,7 +28,7 @@ The project follows a simple flow:
 Use `BinanceRestClient.klines_df()` to load candles for any symbol, interval, and time period.
 
 ```python
-from bot.data.binance_rest import BinanceRestClient
+from bot.data.historical.binance_rest import BinanceRestClient
 
 client = BinanceRestClient()
 df = client.klines_df(
@@ -53,7 +53,7 @@ It takes a DataFrame of klines and returns a DataFrame with a `signal` column ad
 Example:
 
 ```python
-from bot.strategy.signals.sma import SMAStrategy
+from bot.strategies.sma import SMAStrategy
 
 strategy = SMAStrategy(fast_window=10, slow_window=50)
 signal_df = strategy.generate_signals(df)
@@ -65,7 +65,7 @@ You can use `generate_signals(df)` by itself to inspect signals without running 
 Initialize the backtester with the DataFrame and strategy, then call `run()`:
 
 ```python
-from bot.strategy.signals.backtester import Backtester
+from bot.backtesting.backtester import Backtester
 
 bt = Backtester(df, strategy)
 results = bt.run()
@@ -79,12 +79,38 @@ results = bt.run()
 - `Calmar Ratio`
 - `Max Drawdown`
 
+## Run The Bounce Strategy With Slope Filter
+Use the local BTCUSDT CSV data already stored in the repo:
+
+```bash
+python3 -m bot.runners.backtest_bounce_slope \
+  --freq 1m \
+  --dataset 2026-02-12_2026-03-12 \
+  --rolling-window 100 \
+  --atr 300 \
+  --slope-window 75 \
+  --hold-periods 1
+```
+
+To also save the generated signal frame:
+
+```bash
+python3 -m bot.runners.backtest_bounce_slope \
+  --freq 1m \
+  --dataset 2026-02-12_2026-03-12 \
+  --rolling-window 100 \
+  --atr 300 \
+  --slope-window 75 \
+  --hold-periods 1 \
+  --output-csv bot/strategy/discovery/data/backtests/bounce_slope_1m_rw100_atr300.csv
+```
+
 ## Full Example
 
 ```python
-from bot.data.binance_rest import BinanceRestClient
-from bot.strategy.signals.sma import SMAStrategy
-from bot.strategy.signals.backtester import Backtester
+from bot.data.historical.binance_rest import BinanceRestClient
+from bot.strategies.sma import SMAStrategy
+from bot.backtesting.backtester import Backtester
 
 client = BinanceRestClient()
 df = client.klines_df(

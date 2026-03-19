@@ -1,8 +1,6 @@
 import pandas as pd
-import numpy as np
 import glob
 import os
-import matplotlib.pyplot as plt
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -55,6 +53,8 @@ def calculate_market_events(price_series, l_bound, u_bound, rw):
     return bounce_indices, pen_indices
 
 def main(freq, atr):
+    import matplotlib.pyplot as plt
+
     # Configuration
     # atr = 200
     # path = f'bot/data/data/spot/daily/klines/BTCUSDT/{freq}/2026-02-12_2026-03-12/'

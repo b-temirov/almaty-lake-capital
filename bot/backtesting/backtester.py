@@ -9,11 +9,19 @@ class CryptoStrategy:
 
 
 class Backtester:
-    def __init__(self, data, strategy, initial_capital=10000, risk_free_rate=0.0):
+    def __init__(
+        self,
+        data,
+        strategy,
+        initial_capital=10000,
+        risk_free_rate=0.0,
+        annualization_factor=365,
+    ):
         self.data = data.copy()
         self.strategy = strategy
         self.initial_capital = initial_capital
         self.risk_free_rate = risk_free_rate
+        self.annualization_factor = annualization_factor
         self.results = None
 
     def run(self):
@@ -34,7 +42,7 @@ class Backtester:
 
     def calculate_metrics(self):
         returns = self.data["strategy_returns"].dropna()
-        ann_factor = 365
+        ann_factor = self.annualization_factor
         mean_ret = returns.mean() * ann_factor
         std_ret = returns.std() * np.sqrt(ann_factor)
 
