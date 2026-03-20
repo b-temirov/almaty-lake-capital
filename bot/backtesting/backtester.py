@@ -1,4 +1,5 @@
 import numpy as np
+import matplotlib.pyplot as plt
 
 
 class CryptoStrategy:
@@ -74,29 +75,29 @@ class Backtester:
         }
         return self.results
 
-    # def plot_results(self):
-    #     if self.results is None:
-    #         print("Run the backtester first.")
-    #         return
-    #     if plt is None:
-    #         print("matplotlib is not installed. Plotting is unavailable.")
-    #         return
+    def plot_results(self):
+        if self.results is None:
+            print("Run the backtester first.")
+            return
+        if plt is None:
+            print("matplotlib is not installed. Plotting is unavailable.")
+            return
 
-    #     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
 
-    #     # Plot Equity Curve
-    #     ax1.plot(self.data['open_time'], self.data['equity_curve'], label='Strategy Equity', color='blue')
-    #     ax1.set_title('Strategy Equity Curve')
-    #     ax1.set_ylabel('Capital ($)')
-    #     ax1.grid(True)
-    #     ax1.legend()
+        # Plot Equity Curve
+        ax1.plot(self.data['open_time'], self.data['equity_curve'], label='Strategy Equity', color='blue')
+        ax1.set_title('Strategy Equity Curve')
+        ax1.set_ylabel('Capital ($)')
+        ax1.grid(True)
+        ax1.legend()
 
-    #     # Plot Drawdown
-    #     ax2.fill_between(self.data['open_time'], self.data['drawdown'], 0, color='red', alpha=0.3, label='Drawdown')
-    #     ax2.set_title('Underwater Plot (Drawdown)')
-    #     ax2.set_ylabel('Drawdown %')
-    #     ax2.set_xlabel('Time')
-    #     ax2.grid(True)
+        # Plot Drawdown
+        ax2.fill_between(self.data['open_time'], self.data['drawdown'], 0, color='red', alpha=0.3, label='Drawdown')
+        ax2.set_title('Underwater Plot (Drawdown)')
+        ax2.set_ylabel('Drawdown %')
+        ax2.set_xlabel('Time')
+        ax2.grid(True)
 
-    #     plt.tight_layout()
-    #     plt.show()
+        plt.tight_layout()
+        plt.show()

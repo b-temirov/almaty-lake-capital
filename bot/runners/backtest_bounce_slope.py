@@ -1,9 +1,9 @@
 import argparse
 import glob
 import json
-import os
+import os, sys
 from pathlib import Path
-
+sys.path.append(os.getcwd())
 import pandas as pd
 
 from bot.backtesting.backtester import Backtester
@@ -55,8 +55,8 @@ def load_local_klines(symbol: str, interval: str, dataset: str) -> pd.DataFrame:
     df_list = [pd.read_csv(file_path, header=None, names=KLINE_COLUMNS) for file_path in files]
     data = pd.concat(df_list, ignore_index=True)
     data = data.sort_values("open_time").reset_index(drop=True)
-    data["open_time"] = pd.to_datetime(data["open_time"], unit="ms", utc=True)
-    data["close_time"] = pd.to_datetime(data["close_time"], unit="ms", utc=True)
+    data["open_time"] = pd.to_datetime(data["open_time"], unit="us", utc=True)
+    data["close_time"] = pd.to_datetime(data["close_time"], unit="us", utc=True)
     return data
 
 
@@ -64,13 +64,14 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Backtest the slope-filtered bounce strategy")
     parser.add_argument("--symbol", default="BTCUSDT")
     parser.add_argument("--freq", default="1m")
-    parser.add_argument("--dataset", default="2026-02-12_2026-03-12")
+    parser.add_argument("--dataset", default="2026-01-11_2026-03-13")
     parser.add_argument("--rolling-window", type=int, required=True)
     parser.add_argument("--atr", type=float, required=True)
     parser.add_argument("--slope-window", type=int, default=75)
     parser.add_argument("--hold-periods", type=int, default=1)
     parser.add_argument("--initial-capital", type=float, default=10000.0)
     parser.add_argument("--output-csv")
+    parser.add_argument("--plot_results")
     return parser.parse_args()
 
 
@@ -103,6 +104,9 @@ def main():
         output_path = Path(args.output_csv)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         backtester.data.to_csv(output_path, index=False)
+
+    if args.plot_results:
+        backtester.plot_results()
 
     summary = {
         "symbol": args.symbol,
