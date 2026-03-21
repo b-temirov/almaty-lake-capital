@@ -3,10 +3,12 @@ import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Optional
 
 import pandas as pd
 from dotenv import load_dotenv
 
+from bot.data.historical.binance_rest import INTERVAL_TO_MS
 from bot.data.historical.binance_rest import BinanceRestClient
 from bot.data.streaming.binance_ws import BinanceWebSocketClient
 from bot.execution.roostoo_client import RoostooClient
@@ -33,10 +35,106 @@ def _load_initial_history(symbol: str, interval: str, limit: int) -> pd.DataFram
     return history.sort_values("open_time").reset_index(drop=True)
 
 
+def _interval_ms(interval: str) -> int:
+    if interval not in INTERVAL_TO_MS:
+        raise ValueError(f"Unsupported interval: {interval}")
+    return INTERVAL_TO_MS[interval]
+
+
 def _derive_trade_quantity(notional_usd: float, last_price: float) -> float:
     if last_price <= 0:
         raise ValueError("last_price must be positive")
     return notional_usd / last_price
+
+
+def _fetch_missing_history(
+    rest_client: BinanceRestClient,
+    symbol: str,
+    interval: str,
+    previous_open_time: pd.Timestamp,
+    next_open_time: pd.Timestamp,
+) -> pd.DataFrame:
+    interval_delta_ms = _interval_ms(interval)
+    expected_next_open_time = previous_open_time + pd.Timedelta(milliseconds=interval_delta_ms)
+
+    if next_open_time <= expected_next_open_time:
+        return pd.DataFrame()
+
+    missing_until = next_open_time - pd.Timedelta(milliseconds=interval_delta_ms)
+    missing_history = rest_client.klines_df(
+        symbol=symbol,
+        interval=interval,
+        limit=1000,
+        start_time=int(expected_next_open_time.timestamp() * 1000),
+        end_time=int(missing_until.timestamp() * 1000),
+    )
+    return missing_history
+
+
+def _normalize_order_quantity(
+    coin: str,
+    quantity: float,
+    execution_client: Optional[RoostooClient],
+) -> float:
+    if execution_client is not None:
+        return execution_client.round_quantity(coin, quantity)
+
+    hardcoded_amount_precision = {
+        "BTC": 5,
+    }
+    precision = hardcoded_amount_precision.get(coin.upper())
+    if precision is None:
+        return quantity
+
+    return round(quantity, precision)
+
+
+def _buy_position(
+    *,
+    symbol: str,
+    coin: str,
+    latest_close: float,
+    trade_notional_usd: float,
+    portfolio: PortfolioState,
+    execution_client: Optional[RoostooClient],
+    dry_run: bool,
+) -> bool:
+    buy_notional_usd = min(trade_notional_usd, portfolio.cash_usd)
+    if buy_notional_usd <= 0:
+        logger.warning("No cash available for a new buy.")
+        return False
+
+    trade_quantity = _derive_trade_quantity(
+        notional_usd=buy_notional_usd,
+        last_price=latest_close,
+    )
+    trade_quantity = _normalize_order_quantity(
+        coin=coin,
+        quantity=trade_quantity,
+        execution_client=execution_client,
+    )
+    if trade_quantity <= 0:
+        logger.warning("Rounded buy quantity became zero. Skipping buy.")
+        return False
+
+    if dry_run:
+        logger.info(
+            "DRY RUN buy signal symbol=%s quantity=%.8f notional_usd=%.2f close=%s",
+            symbol,
+            trade_quantity,
+            buy_notional_usd,
+            latest_close,
+        )
+    else:
+        order_result = execution_client.market_buy(  # type: ignore
+            coin=coin, quantity=trade_quantity
+        )
+        logger.info("BUY order placed result=%s", order_result)
+
+    portfolio.cash_usd -= buy_notional_usd
+    portfolio.asset_quantity = trade_quantity
+    portfolio.entry_price = latest_close
+    return True
 
 
 def _portfolio_snapshot(portfolio: PortfolioState, last_price: float):
@@ -95,10 +193,13 @@ def run_live_ema_session(
         raise ValueError("allocated_capital_usd must be positive")
     if trade_notional_usd <= 0:
         raise ValueError("trade_notional_usd must be positive")
+    if warmup_limit < slow_window:
+        raise ValueError("warmup_limit must be at least slow_window")
 
     load_dotenv()
     setup_logging()
 
+    rest_client = BinanceRestClient()
     market_history = _load_initial_history(
         symbol=symbol,
         interval=interval,
@@ -124,6 +225,7 @@ def run_live_ema_session(
     seeded_signals = strategy.generate_signals(market_history)
     if not seeded_signals.empty:
         last_signal = int(seeded_signals["signal"].iloc[-1])
+        latest_seeded_close = float(seeded_signals["close"].iloc[-1])
 
     logger.info(
         "Starting live EMA session symbol=%s interval=%s runtime_minutes=%s dry_run=%s start_time=%s initial_signal=%s allocated_capital_usd=%.2f trade_notional_usd=%.2f",
@@ -136,6 +238,22 @@ def run_live_ema_session(
         allocated_capital_usd,
         trade_notional_usd,
     )
+
+    if last_signal == 1 and current_position == 0:
+        logger.info(
+            "Initial seeded signal is bullish. Entering position immediately at close=%s",
+            latest_seeded_close,
+        )
+        if _buy_position(
+            symbol=symbol,
+            coin=coin,
+            latest_close=latest_seeded_close,
+            trade_notional_usd=trade_notional_usd,
+            portfolio=portfolio,
+            execution_client=execution_client,
+            dry_run=dry_run,
+        ):
+            current_position = 1
 
     for candle_df in ws_client.stream_klines_df(
         symbol=symbol,
@@ -150,7 +268,27 @@ def run_live_ema_session(
         if candle_open_time <= last_processed_open_time:
             continue
 
-        market_history = pd.concat([market_history, candle_df], ignore_index=True)
+        missing_history = _fetch_missing_history(
+            rest_client=rest_client,
+            symbol=symbol,
+            interval=interval,
+            previous_open_time=last_processed_open_time,
+            next_open_time=candle_open_time,
+        )
+        if not missing_history.empty:
+            logger.warning(
+                "Backfilled missing candles symbol=%s interval=%s missing_count=%s from_open_time=%s to_open_time=%s",
+                symbol,
+                interval,
+                len(missing_history),
+                missing_history["open_time"].iloc[0],
+                missing_history["open_time"].iloc[-1],
+            )
+
+        market_history = pd.concat(
+            [market_history, missing_history, candle_df],
+            ignore_index=True,
+        )
         market_history = (
             market_history.drop_duplicates(subset=["open_time"])
             .sort_values("open_time")
@@ -190,37 +328,31 @@ def run_live_ema_session(
             continue
 
         if latest_signal == 1 and current_position == 0:
-            buy_notional_usd = min(trade_notional_usd, portfolio.cash_usd)
-            if buy_notional_usd <= 0:
-                logger.warning("No cash available for a new buy. Stopping session.")
+            if _buy_position(
+                symbol=symbol,
+                coin=coin,
+                latest_close=latest_close,
+                trade_notional_usd=trade_notional_usd,
+                portfolio=portfolio,
+                execution_client=execution_client,
+                dry_run=dry_run,
+            ):
+                current_position = 1
+            else:
+                logger.warning("Unable to enter long position. Stopping session.")
                 break
 
-            trade_quantity = _derive_trade_quantity(
-                notional_usd=buy_notional_usd,
-                last_price=latest_close,
-            )
-
-            if dry_run:
-                logger.info(
-                    "DRY RUN buy signal symbol=%s quantity=%.8f notional_usd=%.2f close=%s",
-                    symbol,
-                    trade_quantity,
-                    buy_notional_usd,
-                    latest_close,
-                )
-            else:
-                order_result = execution_client.market_buy(  # type: ignore
-                    coin=coin, quantity=trade_quantity
-                )
-                logger.info("BUY order placed result=%s", order_result)
-
-            portfolio.cash_usd -= buy_notional_usd
-            portfolio.asset_quantity = trade_quantity
-            portfolio.entry_price = latest_close
-            current_position = 1
-
         elif latest_signal == 0 and current_position == 1:
-            trade_quantity = portfolio.asset_quantity
+            trade_quantity = _normalize_order_quantity(
+                coin=coin,
+                quantity=portfolio.asset_quantity,
+                execution_client=execution_client,
+            )
+            if trade_quantity <= 0:
+                logger.warning("Rounded sell quantity became zero. Skipping sell.")
+                last_signal = latest_signal
+                last_processed_open_time = candle_open_time
+                continue
             sell_notional_usd = trade_quantity * latest_close
 
             if dry_run:

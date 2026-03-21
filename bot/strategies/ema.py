@@ -18,13 +18,21 @@ class EMAStrategy(CryptoStrategy):
 
     def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         data = df.copy()
-        data["ema_fast"] = data["close"].ewm(
-            span=self.fast_window,
-            adjust=False,
-        ).mean()
-        data["ema_slow"] = data["close"].ewm(
-            span=self.slow_window,
-            adjust=False,
-        ).mean()
-        data["signal"] = np.where(data["ema_fast"] > data["ema_slow"], 1, 0)
+        data["ema_fast"] = (
+            data["close"]
+            .ewm(
+                span=self.fast_window,
+                adjust=False,
+            )
+            .mean()
+        )
+        data["ema_slow"] = (
+            data["close"]
+            .ewm(
+                span=self.slow_window,
+                adjust=False,
+            )
+            .mean()
+        )
+        data["signal"] = np.where(data["ema_fast"] < data["ema_slow"], 1, 0)
         return data
