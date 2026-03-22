@@ -5,6 +5,7 @@ from typing import Callable, Dict, Optional
 
 import pandas as pd
 import websocket
+from websocket import WebSocketTimeoutException
 
 from bot.data.historical.binance_rest import SUPPORTED_INTERVALS
 
@@ -19,7 +20,7 @@ class BinanceWebSocketClient:
         time_zone: str = "+08:00",
         reconnect_delay_seconds: float = 1.0,
         max_reconnect_delay_seconds: float = 30.0,
-        recv_timeout_seconds: float = 30.0,
+        recv_timeout_seconds: float = 90.0,
     ):
         self.base_url = base_url.rstrip("/")
         self.time_zone = time_zone
@@ -109,6 +110,28 @@ class BinanceWebSocketClient:
                         yield df
             except KeyboardInterrupt:
                 raise
+            except WebSocketTimeoutException:
+                logger.warning(
+                    "Binance websocket stream timed out symbol=%s interval=%s timeout_seconds=%.1f reconnect=%s",
+                    symbol.upper(),
+                    interval,
+                    self.recv_timeout_seconds,
+                    reconnect,
+                )
+                if not reconnect:
+                    raise
+
+                logger.info(
+                    "Reconnecting Binance websocket stream symbol=%s interval=%s retry_in_seconds=%.1f",
+                    symbol.upper(),
+                    interval,
+                    retry_delay_seconds,
+                )
+                time.sleep(retry_delay_seconds)
+                retry_delay_seconds = min(
+                    retry_delay_seconds * 2,
+                    self.max_reconnect_delay_seconds,
+                )
             except Exception:
                 logger.exception(
                     "Binance websocket stream failed symbol=%s interval=%s reconnect=%s",
