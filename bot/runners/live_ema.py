@@ -55,7 +55,9 @@ def _fetch_missing_history(
     next_open_time: pd.Timestamp,
 ) -> pd.DataFrame:
     interval_delta_ms = _interval_ms(interval)
-    expected_next_open_time = previous_open_time + pd.Timedelta(milliseconds=interval_delta_ms)
+    expected_next_open_time = previous_open_time + pd.Timedelta(
+        milliseconds=interval_delta_ms
+    )
 
     if next_open_time <= expected_next_open_time:
         return pd.DataFrame()
@@ -405,8 +407,14 @@ def run_live_ema_session(
 
 if __name__ == "__main__":
     run_live_ema_session(
-        runtime_minutes=240,
-        allocated_capital_usd=1000,
-        trade_notional_usd=100,
+        runtime_minutes=11520,
+        symbol="BTCUSDT",
+        coin="BTC",
+        interval="1m",
+        fast_window=20,
+        slow_window=40,
+        warmup_limit=1000,
+        allocated_capital_usd=1_000_000,
+        trade_notional_usd=999_000,
         dry_run=False,
     )
