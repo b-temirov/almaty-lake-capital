@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from typing import Callable, Dict, Optional
 
 import pandas as pd
@@ -16,9 +17,15 @@ class BinanceWebSocketClient:
         self,
         base_url: str = "wss://stream.binance.us:9443/ws",
         time_zone: str = "+08:00",
+        reconnect_delay_seconds: float = 1.0,
+        max_reconnect_delay_seconds: float = 30.0,
+        recv_timeout_seconds: float = 30.0,
     ):
         self.base_url = base_url.rstrip("/")
         self.time_zone = time_zone
+        self.reconnect_delay_seconds = reconnect_delay_seconds
+        self.max_reconnect_delay_seconds = max_reconnect_delay_seconds
+        self.recv_timeout_seconds = recv_timeout_seconds
 
     def _build_stream_name(self, symbol: str, interval: str):
         if interval not in SUPPORTED_INTERVALS:
@@ -58,44 +65,76 @@ class BinanceWebSocketClient:
         on_message: Optional[Callable[[pd.DataFrame], None]] = None,
         closed_only: bool = True,
         time_zone: Optional[str] = None,
+        reconnect: bool = True,
     ):
         stream_url = self._build_stream_url(symbol, interval)
-        logger.info(
-            "Opening Binance websocket stream symbol=%s interval=%s time_zone=%s url=%s",
-            symbol.upper(),
-            interval,
-            self.time_zone if time_zone is None else time_zone,
-            stream_url,
-        )
+        retry_delay_seconds = self.reconnect_delay_seconds
 
-        ws = websocket.create_connection(stream_url)
-
-        try:
-            while True:
-                raw_message = ws.recv()
-                payload = json.loads(raw_message)
-                candle = self._normalize_kline_message(payload)
-
-                if closed_only and not candle["is_closed"]:
-                    continue
-
-                df = pd.DataFrame([candle])
-                logger.debug(
-                    "Received websocket kline symbol=%s interval=%s open_time=%s is_closed=%s",
-                    candle["symbol"],
-                    candle["interval"],
-                    candle["open_time"],
-                    candle["is_closed"],
+        while True:
+            ws = None
+            try:
+                logger.info(
+                    "Opening Binance websocket stream symbol=%s interval=%s time_zone=%s url=%s",
+                    symbol.upper(),
+                    interval,
+                    self.time_zone if time_zone is None else time_zone,
+                    stream_url,
+                )
+                ws = websocket.create_connection(
+                    stream_url,
+                    timeout=self.recv_timeout_seconds,
                 )
 
-                if on_message is not None:
-                    on_message(df)
-                else:
-                    yield df
-        finally:
-            logger.info(
-                "Closing Binance websocket stream symbol=%s interval=%s",
-                symbol.upper(),
-                interval,
-            )
-            ws.close()
+                while True:
+                    raw_message = ws.recv()
+                    payload = json.loads(raw_message)
+                    candle = self._normalize_kline_message(payload)
+
+                    if closed_only and not candle["is_closed"]:
+                        continue
+
+                    df = pd.DataFrame([candle])
+                    logger.debug(
+                        "Received websocket kline symbol=%s interval=%s open_time=%s is_closed=%s",
+                        candle["symbol"],
+                        candle["interval"],
+                        candle["open_time"],
+                        candle["is_closed"],
+                    )
+                    retry_delay_seconds = self.reconnect_delay_seconds
+
+                    if on_message is not None:
+                        on_message(df)
+                    else:
+                        yield df
+            except KeyboardInterrupt:
+                raise
+            except Exception:
+                logger.exception(
+                    "Binance websocket stream failed symbol=%s interval=%s reconnect=%s",
+                    symbol.upper(),
+                    interval,
+                    reconnect,
+                )
+                if not reconnect:
+                    raise
+
+                logger.info(
+                    "Reconnecting Binance websocket stream symbol=%s interval=%s retry_in_seconds=%.1f",
+                    symbol.upper(),
+                    interval,
+                    retry_delay_seconds,
+                )
+                time.sleep(retry_delay_seconds)
+                retry_delay_seconds = min(
+                    retry_delay_seconds * 2,
+                    self.max_reconnect_delay_seconds,
+                )
+            finally:
+                logger.info(
+                    "Closing Binance websocket stream symbol=%s interval=%s",
+                    symbol.upper(),
+                    interval,
+                )
+                if ws is not None:
+                    ws.close()

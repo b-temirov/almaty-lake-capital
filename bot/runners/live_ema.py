@@ -47,6 +47,24 @@ def _derive_trade_quantity(notional_usd: float, last_price: float) -> float:
     return notional_usd / last_price
 
 
+def _derive_market_buy_quantity(
+    *,
+    coin: str,
+    desired_notional_usd: float,
+    execution_client: Optional[RoostooClient],
+    fallback_price: float,
+) -> float:
+    if execution_client is None:
+        return _derive_trade_quantity(desired_notional_usd, fallback_price)
+
+    ticker = execution_client.ticker(f"{coin.upper()}/USD")
+    pair_data = ticker["Data"][f"{coin.upper()}/USD"]
+    ask_price = float(pair_data["MinAsk"])
+    fee_rate = execution_client.fee_rate("MARKET")
+    max_notional_before_fees = desired_notional_usd / (1 + fee_rate)
+    return _derive_trade_quantity(max_notional_before_fees, ask_price)
+
+
 def _fetch_missing_history(
     rest_client: BinanceRestClient,
     symbol: str,
@@ -101,14 +119,23 @@ def _buy_position(
     execution_client: Optional[RoostooClient],
     dry_run: bool,
 ) -> bool:
-    buy_notional_usd = min(trade_notional_usd, portfolio.cash_usd)
+    available_cash_usd = portfolio.cash_usd
+    if execution_client is not None:
+        available_cash_usd = min(
+            available_cash_usd,
+            execution_client.free_balance("USD"),
+        )
+
+    buy_notional_usd = min(trade_notional_usd, available_cash_usd)
     if buy_notional_usd <= 0:
         logger.warning("No cash available for a new buy.")
         return False
 
-    trade_quantity = _derive_trade_quantity(
-        notional_usd=buy_notional_usd,
-        last_price=latest_close,
+    trade_quantity = _derive_market_buy_quantity(
+        coin=coin,
+        desired_notional_usd=buy_notional_usd,
+        execution_client=execution_client,
+        fallback_price=latest_close,
     )
     trade_quantity = _normalize_order_quantity(
         coin=coin,
@@ -128,9 +155,19 @@ def _buy_position(
             latest_close,
         )
     else:
-        order_result = execution_client.market_buy(  # type: ignore
-            coin=coin, quantity=trade_quantity
-        )
+        try:
+            order_result = execution_client.market_buy(  # type: ignore
+                coin=coin, quantity=trade_quantity
+            )
+        except Exception:
+            logger.exception(
+                "BUY order failed symbol=%s quantity=%.8f intended_notional_usd=%.2f close=%s",
+                symbol,
+                trade_quantity,
+                buy_notional_usd,
+                latest_close,
+            )
+            return False
         logger.info("BUY order placed result=%s", order_result)
 
     portfolio.cash_usd -= buy_notional_usd
@@ -366,9 +403,18 @@ def run_live_ema_session(
                     latest_close,
                 )
             else:
-                order_result = execution_client.market_sell(  # type: ignore
-                    coin=coin, quantity=trade_quantity
-                )
+                try:
+                    order_result = execution_client.market_sell(  # type: ignore
+                        coin=coin, quantity=trade_quantity
+                    )
+                except Exception:
+                    logger.exception(
+                        "SELL order failed symbol=%s quantity=%.8f close=%s",
+                        symbol,
+                        trade_quantity,
+                        latest_close,
+                    )
+                    break
                 logger.info("SELL order placed result=%s", order_result)
 
             cost_basis = trade_quantity * portfolio.entry_price
